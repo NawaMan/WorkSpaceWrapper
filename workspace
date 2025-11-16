@@ -172,8 +172,12 @@ function DownloadWorkspace() {
 
     if [[ "${VERBOSE}" == "false" ]]; then
         echo "workspace.sh downloaded, verified, and installed."
+        echo "Workspace written to: $dest"
+        echo "Metadata  written to: $meta_file"
+        echo "Digest    written to: $sha_file"
         echo "Actual version: ${actual_version}"
-        echo "Metadata written to: $meta_file"
+        echo ""
+        echo "You can now rerun: ./workspace"
     fi
 
     rm -f "$tmpsha"
@@ -209,7 +213,7 @@ meta_file="$tools_dir/workspace.sh.meta"
 # Check required files
 if [[ ! -f "$dest" || ! -f "$sha_file" || ! -f "$meta_file" ]]; then
     echo "WorkSpace is not installed correctly."
-    echo "Please run: $0 update"
+    echo "Please run: $0 install"
     exit 1
 fi
 
