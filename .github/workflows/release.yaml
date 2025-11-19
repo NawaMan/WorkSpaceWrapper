@@ -21,7 +21,7 @@ jobs:
         id: get_version
         run: |
           # Expected output: "WorkSpace wrapper 0.1.0"
-          RAW_VERSION_OUTPUT=$(./workspace version)
+          RAW_VERSION_OUTPUT=$(./workspace version | grep "WorkSpace Wrapper:" | grep -Eo ": .+" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
           echo "Raw version output: $RAW_VERSION_OUTPUT"
 
           VERSION=$(echo "$RAW_VERSION_OUTPUT" | awk '{print $NF}')

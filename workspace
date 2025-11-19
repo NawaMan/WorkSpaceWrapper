@@ -46,6 +46,15 @@ EOF
 # Commands that don't need curl or workspace.sh
 case "${COMMAND}" in
     version)
+         cat <<'EOF'
+__      __       _    ___                    __      __                           
+\ \    / /__ _ _| |__/ __|_ __  __ _ __ ___  \ \    / / _ __ _ _ __ _ __  ___ _ _ 
+ \ \/\/ / _ \ '_| / /\__ \ '_ \/ _` / _/ -_)  \ \/\/ / '_/ _` | '_ \ '_ \/ -_) '_|
+  \_/\_/\___/_| |_\_\|___/ .__/\__,_\__\___|   \_/\_/|_| \__,_| .__/ .__/\___|_|  
+                         |_|                                  |_|  |_|            
+
+EOF
+
         echo "WorkSpace Wrapper: $VERSION"
         PRFX="WorkSpace        "
         TOOL=".workspace/tools/workspace.sh"
@@ -63,7 +72,7 @@ case "${COMMAND}" in
 
         if [[ -z "$TOOL_VERSION" ]];
         then echo "${PRFX}: installed (version unknown)"
-        else echo "${PRFX}: $TOOL_VERSION"
+        else echo "$TOOL_VERSION"
         fi
 
         exit 0
