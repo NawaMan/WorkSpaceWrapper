@@ -2,16 +2,14 @@
 set -euo pipefail
 trap 'echo "❌ Error on line $LINENO" >&2; exit 1' ERR
 
-VERSION=0.1.0
+VERSION=0.2.0
 VERBOSE="${VERBOSE:-false}"
 
 # Decide what the "command" is:
-# - No args        -> implicit "run"
-# - With args      -> first arg is the command (update|run|version|help|other)
 if [[ $# -eq 0 ]]; then
-    COMMAND="run"   # implicit run, no "run" in $@
+    COMMAND="run"
 else
-    COMMAND="$1"    # explicit command/update/help/etc
+    COMMAND="$1"
 fi
 
 function print_help() {
@@ -33,20 +31,15 @@ Wrapper commands:
   version            Show this Wrapper's version
   help               Show this help message
 
-Normal usage:
-  $0 [ARGS...]       Same as 'run'; ARGS are passed to workspace.sh
-
 Notes:
-  - '-h' and '--help' are NOT handled by this Wrapper; they are passed to workspace.sh.
-  - workspace.sh, workspace.sh.sha1 and workspace.sh.meta are expected in .workspace/tools
+  - workspace.sh.sha256 and workspace.sh.meta are expected in .workspace/tools
   - Set VERBOSE=true for extra logs during update.
 EOF
 }
 
-# Commands that don't need curl or workspace.sh
 case "${COMMAND}" in
     version)
-         cat <<'EOF'
+        cat <<'EOF'
 __      __       _    ___                    __      __                           
 \ \    / /__ _ _| |__/ __|_ __  __ _ __ ___  \ \    / / _ __ _ _ __ _ __  ___ _ _ 
  \ \/\/ / _ \ '_| / /\__ \ '_ \/ _` / _/ -_)  \ \/\/ / '_/ _` | '_ \ '_ \/ -_) '_|
@@ -54,7 +47,6 @@ __      __       _    ___                    __      __
                          |_|                                  |_|  |_|            
 
 EOF
-
         echo "WorkSpace Wrapper: $VERSION"
         PRFX="WorkSpace        "
         TOOL=".workspace/tools/workspace.sh"
@@ -64,27 +56,24 @@ EOF
             exit 0
         fi
 
-        if [[ ! -x "$TOOL" ]]; then
-            chmod +x "$TOOL" 2>/dev/null || true
-        fi
+        if [[ ! -x "$TOOL" ]]; then chmod +x "$TOOL" 2>/dev/null || true; fi
 
         TOOL_VERSION=$("$TOOL" ws-version 2>/dev/null || echo "")
 
-        if [[ -z "$TOOL_VERSION" ]];
-        then echo "${PRFX}: installed (version unknown)"
-        else echo "$TOOL_VERSION"
+        if [[ -z "$TOOL_VERSION" ]]; then
+            echo "${PRFX}: installed (version unknown)"
+        else
+            echo "$TOOL_VERSION"
         fi
-
         exit 0
         ;;
-
     help)
         print_help
         exit 0
         ;;
 esac
 
-# For update/run/other we may need curl
+# Need curl for update/run
 if ! command -v curl >/dev/null 2>&1; then
     echo "curl does not exist."
     exit 1
@@ -92,95 +81,87 @@ fi
 
 function DownloadWorkspace() {
     WS_VERSION=${1:-latest}
-    local tmpfile tmpsha URL SHA_URL expected_sha1 actual_sha1 dest dest_dir meta_file sha_file actual_version
+    local tmpfile tmpsha256 expected_sha256 actual_sha256 dest dest_dir sha_file meta_file actual_version
 
-    tmpfile=$(mktemp "/tmp/workspace.sh.XXXXXX") || {
-        echo "Failed to create temp file" >&2
-        return 1
-    }
-
-    tmpsha=$(mktemp "/tmp/workspace.sh.sha1.XXXXXX") || {
-        echo "Failed to create temp sha1 file" >&2
-        rm -f "$tmpfile"
-        return 1
-    }
+    tmpfile=$(mktemp "/tmp/workspace.sh.XXXXXX")
+    tmpsha256=$(mktemp "/tmp/workspace.sh.sha256.XXXXXX")
 
     REPO_URL="https://github.com/NawaMan/WorkSpace"
     DWLD_URL="${REPO_URL}/releases/download"
     TOOL_URL="${DWLD_URL}/${WS_VERSION}/workspace.sh"
-    SHA1_URL="${DWLD_URL}/${WS_VERSION}/workspace.sh.sha1"
+    SHA256_URL="${DWLD_URL}/${WS_VERSION}/workspace.sh.sha256"
 
     # Download script
-    if ! curl -sSLo "$tmpfile" "$TOOL_URL"; then
+    if ! curl -fsSLo "$tmpfile" "$TOOL_URL"; then
         echo "Error: Failed to download workspace.sh from ${TOOL_URL}" >&2
-        rm -f "$tmpfile" "$tmpsha"
+        rm -f "$tmpfile" "$tmpsha256"
         return 1
     fi
 
-    # Download SHA1 file
-    if ! curl -sSLo "$tmpsha" "$SHA1_URL"; then
-        echo "Error: Failed to download workspace.sh.sha1 from ${SHA1_URL}" >&2
-        rm -f "$tmpfile" "$tmpsha"
+    # Download SHA256 file
+    if ! curl -fsSLo "$tmpsha256" "$SHA256_URL"; then
+        echo "Error: Failed to download workspace.sh.sha256 from ${SHA256_URL}" >&2
+        rm -f "$tmpfile" "$tmpsha256"
         return 1
     fi
 
-    # Read expected hash
-    expected_sha1=$(awk '{print $1}' "$tmpsha")
-    if [ -z "$expected_sha1" ]; then
-        echo "Error: SHA1 file is empty or malformed" >&2
-        rm -f "$tmpfile" "$tmpsha"
+    # Read expected SHA256
+    expected_sha256=$(awk '{print $1}' "$tmpsha256")
+
+    # Validate SHA256 format (64 hex chars)
+    if ! [[ "$expected_sha256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+        echo "Error: SHA256 file is malformed (got '$expected_sha256')" >&2
+        rm -f "$tmpfile" "$tmpsha256"
         return 1
     fi
 
     # Compute actual hash
-    actual_sha1=$(sha1sum "$tmpfile" | awk '{print $1}')
+    actual_sha256=$(sha256sum "$tmpfile" | awk '{print $1}')
 
-    if [ "$expected_sha1" != "$actual_sha1" ]; then
-        echo "Error: SHA1 mismatch for workspace.sh" >&2
-        echo "  Expected: $expected_sha1" >&2
-        echo "  Actual:   $actual_sha1" >&2
-        rm -f "$tmpfile" "$tmpsha"
+    if [[ "$expected_sha256" != "$actual_sha256" ]]; then
+        echo "Error: SHA256 mismatch for workspace.sh" >&2
+        echo "  Expected: $expected_sha256" >&2
+        echo "  Actual:   $actual_sha256" >&2
+        rm -f "$tmpfile" "$tmpsha256"
         return 1
     fi
 
-    # Get the actual version from the downloaded file
+    # Determine version from downloaded file
     chmod +x "$tmpfile"
-    actual_version=$("$tmpfile" ws-version 2>/dev/null)
+    actual_version=$("$tmpfile" ws-version 2>/dev/null || echo "")
 
-    if [ -z "$actual_version" ]; then
-        echo "Error: Could not determine actual version from downloaded workspace.sh" >&2
-        rm -f "$tmpfile" "$tmpsha"
+    if [[ -z "$actual_version" ]]; then
+        echo "Error: Could not determine version from workspace.sh" >&2
+        rm -f "$tmpfile" "$tmpsha256"
         return 1
     fi
 
-    # Install locations (relative to CWD, NO $HOME)
+    # Install locations
     dest=".workspace/tools/workspace.sh"
     dest_dir="$(dirname "$dest")"
-    sha_file="$dest_dir/workspace.sh.sha1"
+    sha_file="$dest_dir/workspace.sh.sha256"
     meta_file="$dest_dir/workspace.sh.meta"
 
     mkdir -p "$dest_dir"
 
-    # Replace existing file
     mv -f "$tmpfile" "$dest"
     chmod +x "$dest"
 
-    # Save local SHA1 file
-    printf '%s  %s\n' "$actual_sha1" "workspace.sh" > "$sha_file"
+    # Save local checksum
+    printf '%s  %s\n' "$actual_sha256" "workspace.sh" > "$sha_file"
 
-    # Write metadata file with TRUE version
+    # Write metadata
     {
         echo "version=${actual_version}"
         echo "url=${TOOL_URL}"
-        echo "sha1=${actual_sha1}"
+        echo "sha256=${actual_sha256}"
         echo "downloaded_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     } > "$meta_file"
 
-    # Ensure workspace.sh is the newest file
     touch "$dest"
 
     if [[ "${VERBOSE}" == "false" ]]; then
-        echo "workspace.sh downloaded, verified, and installed."
+        echo "workspace.sh downloaded, verified (SHA256), and installed."
         echo "Workspace written to: $dest"
         echo "Metadata  written to: $meta_file"
         echo "Digest    written to: $sha_file"
@@ -189,11 +170,10 @@ function DownloadWorkspace() {
         echo "You can now rerun: ./workspace"
     fi
 
-    rm -f "$tmpsha"
+    rm -f "$tmpsha256"
 }
 
 ### --- COMMAND DISPATCH --- ###
-
 case "${COMMAND}" in
     install|update)
         WS_VERSION="${2:-latest}"
@@ -201,44 +181,37 @@ case "${COMMAND}" in
         exit 0
         ;;
     run)
-        # Explicit run: drop the literal "run" so workspace.sh doesn't see it
-        if [[ "${1-}" == "run" ]]; then
-            shift
-        fi
+        if [[ "${1-}" == "run" ]]; then shift; fi
         ;;
     *)
-        # Anything else (including -h/--help/etc):
-        # treat as implicit run; DO NOT shift, $1 is an arg for workspace.sh.
         ;;
 esac
 
-### --- RUN MODE (implicit OR explicit) --- ###
-
+### --- RUN MODE --- ###
 dest=".workspace/tools/workspace.sh"
 tools_dir=".workspace/tools"
-sha_file="$tools_dir/workspace.sh.sha1"
+sha_file="$tools_dir/workspace.sh.sha256"
 meta_file="$tools_dir/workspace.sh.meta"
 
-# Check required files
+# Required files existence
 if [[ ! -f "$dest" || ! -f "$sha_file" || ! -f "$meta_file" ]]; then
     echo "WorkSpace is not installed correctly."
     echo "Please run: $0 install"
     exit 1
 fi
 
-# Ensure workspace.sh is newer than the checksum file
+# Ensure workspace.sh is newer than checksum
 if [[ "$dest" -ot "$sha_file" ]]; then
     echo "workspace.sh appears older than its checksum file."
     echo "Please run: $0 update"
     exit 1
 fi
 
-# Check SHA1 from local file before run
-if ! (cd "$tools_dir" && sha1sum -c "workspace.sh.sha1" >/dev/null); then
-    echo "Local workspace.sh failed SHA1 verification."
+# Verify SHA256
+if ! (cd "$tools_dir" && sha256sum -c "workspace.sh.sha256" >/dev/null); then
+    echo "Local workspace.sh failed SHA256 verification."
     echo "Please run: $0 update"
     exit 1
 fi
 
-# All good: run workspace.sh with remaining args (whatever they are)
 exec "$dest" "$@"
