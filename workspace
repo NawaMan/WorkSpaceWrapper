@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
-trap 'echo "❌ Error on line $LINENO" >&2; exit 1' ERR
+trap 'status=$?; echo "❌ Error on line $LINENO (exit $status)" >&2; exit "$status"' ERR
 
 VERSION=0.2.0
-VERBOSE="${VERBOSE:-false}"
+VERBOSE="${VERBOSE:-true}"
 
 # Decide what the "command" is:
 if [[ $# -eq 0 ]]; then
@@ -14,7 +14,7 @@ fi
 
 function print_help() {
     cat <<EOF
-Usage: $0 <command> [args...]
+Usage: $(basename "$0") <command> [args...]
 
 Purpose:
   This script is the *WorkSpace Wrapper*.
@@ -26,10 +26,12 @@ Purpose:
     remains a reliable, stable entry point for users.
 
 Wrapper commands:
-  update [VERSION]   Download or update .workspace/tools/workspace.sh
-  run [ARGS...]      Run workspace.sh with ARGS (after integrity checks)
-  version            Show this Wrapper's version
-  help               Show this help message
+  install [VERSION]   Download or update .workspace/tools/workspace.sh
+  update  [VERSION]   Download or update .workspace/tools/workspace.sh
+  uninstall           Remove installed workspace.sh and related files
+  run [ARGS...]       Run workspace.sh with ARGS (after integrity checks)
+  version             Show this Wrapper's version
+  help                Show this help message
 
 Notes:
   - workspace.sh.sha256 and workspace.sh.meta are expected in .workspace/tools
@@ -75,9 +77,40 @@ esac
 
 # Need curl for update/run
 if ! command -v curl >/dev/null 2>&1; then
-    echo "curl does not exist."
+    echo "Error: curl is required but not found in PATH." >&2
     exit 1
 fi
+
+hash_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$@"
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$@"
+    else
+        echo "Error: no SHA256 tool found (sha256sum or shasum)." >&2
+        return 1
+    fi
+}
+
+function UninstallWorkspace() {
+    local dest=".workspace/tools/workspace.sh"
+    local tools_dir=".workspace/tools"
+    local sha_file="$tools_dir/workspace.sh.sha256"
+    local meta_file="$tools_dir/workspace.sh.meta"
+
+    if [[ ! -f "$dest" && ! -f "$sha_file" && ! -f "$meta_file" ]]; then
+        echo "WorkSpace is already uninstalled (no workspace.sh or related files found)."
+        return 0
+    fi
+
+    rm -f "$dest" "$sha_file" "$meta_file"
+
+    # Attempt cleanup of empty directories (ignore errors)
+    rmdir "$tools_dir" 2>/dev/null || true
+    rmdir ".workspace" 2>/dev/null || true
+
+    echo "WorkSpace has been uninstalled."
+}
 
 function DownloadWorkspace() {
     WS_VERSION=${1:-latest}
@@ -116,7 +149,10 @@ function DownloadWorkspace() {
     fi
 
     # Compute actual hash
-    actual_sha256=$(sha256sum "$tmpfile" | awk '{print $1}')
+    if ! actual_sha256=$(hash_sha256 "$tmpfile" | awk '{print $1}'); then
+        rm -f "$tmpfile" "$tmpsha256"
+        return 1
+    fi
 
     if [[ "$expected_sha256" != "$actual_sha256" ]]; then
         echo "Error: SHA256 mismatch for workspace.sh" >&2
@@ -144,7 +180,11 @@ function DownloadWorkspace() {
 
     mkdir -p "$dest_dir"
 
-    mv -f "$tmpfile" "$dest"
+    if ! mv -f "$tmpfile" "$dest"; then
+        echo "Error: Failed to move workspace.sh into $dest" >&2
+        rm -f "$tmpfile" "$tmpsha256"
+        return 1
+    fi
     chmod +x "$dest"
 
     # Save local checksum
@@ -160,7 +200,7 @@ function DownloadWorkspace() {
 
     touch "$dest"
 
-    if [[ "${VERBOSE}" == "false" ]]; then
+    if [[ "${VERBOSE}" == "true" ]]; then
         echo "workspace.sh downloaded, verified (SHA256), and installed."
         echo "Workspace written to: $dest"
         echo "Metadata  written to: $meta_file"
@@ -175,6 +215,10 @@ function DownloadWorkspace() {
 
 ### --- COMMAND DISPATCH --- ###
 case "${COMMAND}" in
+    uninstall)
+        UninstallWorkspace
+        exit 0
+        ;;
     install|update)
         WS_VERSION="${2:-latest}"
         DownloadWorkspace "${WS_VERSION}"
@@ -208,7 +252,7 @@ if [[ "$dest" -ot "$sha_file" ]]; then
 fi
 
 # Verify SHA256
-if ! (cd "$tools_dir" && sha256sum -c "workspace.sh.sha256" >/dev/null); then
+if ! (cd "$tools_dir" && hash_sha256 -c "workspace.sh.sha256" >/dev/null); then
     echo "Local workspace.sh failed SHA256 verification."
     echo "Please run: $0 update"
     exit 1
