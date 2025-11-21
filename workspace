@@ -6,42 +6,99 @@ VERSION=0.2.0
 VERBOSE="${VERBOSE:-true}"
 
 # Decide what the "command" is:
-if [[ $# -eq 0 ]]; then
-    COMMAND="run"
-else
-    COMMAND="$1"
-fi
+if [[ $# -eq 0 ]]; then COMMAND="run" ; else COMMAND="$1" ; fi
 
-function print_help() {
+function Main() {
+    ### --- COMMAND DISPATCH --- ###
+    case "${COMMAND}" in
+        uninstall)      UninstallWorkspace               ; exit 0 ; ;;
+        rehash)         RehashWorkspace                  ; exit 0 ; ;;
+        install|update) DownloadWorkspace "${2:-latest}" ; exit 0 ; ;;
+        run)            [[ "${1-}" == "run" ]] && shift  ;          ;;
+        *)                                                          ;;
+    esac
+
+    ### --- RUN MODE --- ###
+    tools_dir=".workspace/tools"
+    dest="$tools_dir/workspace.sh"
+    sha_file="$tools_dir/workspace.sh.sha256"
+    meta_file="$tools_dir/workspace.sh.meta"
+
+    if [[ ! -f "$dest" || ! -f "$sha_file" || ! -f "$meta_file" ]]; then
+        echo "WorkSpace is not installed correctly."
+        echo "Please run: $0 install"
+        exit 1
+    fi
+
+    # Default integrity: local (allow local modifications by design)
+    integrity_mode="local"
+    if [[ -f "$meta_file" ]]; then
+        integrity_mode=$(grep '^integrity=' "$meta_file" 2>/dev/null | cut -d= -f2- || echo "local")
+    fi
+
+    # Runtime override: WS_INTEGRITY=official forces official mode
+    if [[ "${WS_INTEGRITY:-}" == "official" ]]; then
+        integrity_mode="official"
+    fi
+
+    # Ensure workspace.sh is newer than checksum
+    if [[ "$dest" -ot "$sha_file" ]]; then
+        echo "workspace.sh appears older than its checksum file."
+        echo "Run: $0 update  to restore the official release."
+        exit 1
+    fi
+
+    # Verify SHA256 (suppress raw sha* warnings; we print our own)
+    if ! (cd "$tools_dir" && hash_sha256 -c "workspace.sh.sha256" >/dev/null 2>&1); then
+        echo "Local workspace.sh failed SHA256 verification."
+
+        if [[ "$integrity_mode" == "local" ]]; then
+            echo "Run:    $0 update  to restore the official release,"
+            echo "or run: $0 rehash  to accept your recent modifications."
+        else
+            echo "Run: $0 update  to restore the official release."
+        fi
+        exit 1
+    fi
+
+    # Checksum passed; now it's fair to say we're running.
+    if [[ "$integrity_mode" == "local" ]]; then
+        echo "⚠️  Hash Check: Running locally modified WorkSpace script (integrity=local)." >&2
+        echo "⚠️  Hash Check: To restore the official release, run: $0 update" >&2
+    fi
+
+    exec "$dest" "$@"
+}
+
+function PrintHelp() {
     cat <<EOF
 Usage: $(basename "$0") <command> [args...]
 
 Purpose:
   This script is the *WorkSpace Wrapper*.
-  - It is meant to be small and stable, living in the WorkSpaceWrapper project.
-  - It does NOT auto-update itself.
-  - It downloads, verifies and runs the actual WorkSpace script
+  - It is stable and does not update itself.
+  - It downloads, verifies, and runs the actual WorkSpace script
     (.workspace/tools/workspace.sh) from the WorkSpace project.
-  - This allows workspace.sh to evolve independently, while the Wrapper
-    remains a reliable, stable entry point for users.
+  - This lets workspace.sh evolve independently while keeping a reliable entry point.
 
 Wrapper commands:
   install [VERSION]   Download or update .workspace/tools/workspace.sh
   update  [VERSION]   Download or update .workspace/tools/workspace.sh
-  uninstall           Remove installed workspace.sh and related files
+  uninstall           Remove workspace.sh and metadata files
+  rehash              Accept local edits and set a new trusted SHA256 baseline
   run [ARGS...]       Run workspace.sh with ARGS (after integrity checks)
-  version             Show this Wrapper's version
+  version             Show this wrapper's version
   help                Show this help message
 
 Notes:
-  - workspace.sh.sha256 and workspace.sh.meta are expected in .workspace/tools
-  - Set VERBOSE=true for extra logs during update.
+  - workspace.sh.sha256 and workspace.sh.meta live in .workspace/tools
+  - Set VERBOSE=true for extra logs during update
+  - Set WS_INTEGRITY=official to enforce official integrity checks at runtime
 EOF
 }
 
-case "${COMMAND}" in
-    version)
-        cat <<'EOF'
+function PrintVersion() {
+    cat <<'EOF'
 __      __       _    ___                    __      __                           
 \ \    / /__ _ _| |__/ __|_ __  __ _ __ ___  \ \    / / _ __ _ _ __ _ __  ___ _ _ 
  \ \/\/ / _ \ '_| / /\__ \ '_ \/ _` / _/ -_)  \ \/\/ / '_/ _` | '_ \ '_ \/ -_) '_|
@@ -49,63 +106,42 @@ __      __       _    ___                    __      __
                          |_|                                  |_|  |_|            
 
 EOF
-        echo "WorkSpace Wrapper: $VERSION"
-        PRFX="WorkSpace        "
-        TOOL=".workspace/tools/workspace.sh"
+    echo "WorkSpace Wrapper: $VERSION"
 
-        if [[ ! -f "$TOOL" ]]; then
-            echo "${PRFX}: uninstalled"
-            exit 0
-        fi
+    TOOL=".workspace/tools/workspace.sh"
+    META=".workspace/tools/workspace.sh.meta"
 
-        if [[ ! -x "$TOOL" ]]; then chmod +x "$TOOL" 2>/dev/null || true; fi
+    if [[ ! -f "$TOOL" ]]; then echo "WorkSpace: uninstalled" ; exit 0 ; fi
 
-        TOOL_VERSION=$("$TOOL" ws-version 2>/dev/null || echo "")
+    [[ ! -x "$TOOL" ]] && chmod +x "$TOOL" 2>/dev/null || true
 
-        if [[ -z "$TOOL_VERSION" ]]; then
-            echo "${PRFX}: installed (version unknown)"
-        else
-            echo "$TOOL_VERSION"
-        fi
-        exit 0
-        ;;
-    help)
-        print_help
-        exit 0
-        ;;
-esac
+    TOOL_VERSION=$("$TOOL" ws-version 2>/dev/null || echo "unknown")
 
-# Need curl for update/run
-if ! command -v curl >/dev/null 2>&1; then
-    echo "Error: curl is required but not found in PATH." >&2
-    exit 1
-fi
+    local_integrity="local"
+    if [[ -f "$META" ]]; then
+        local_integrity=$(grep '^integrity=' "$META" 2>/dev/null | cut -d= -f2- || echo "local")
+    fi
 
-hash_sha256() {
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$@"
-    elif command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "$@"
-    else
-        echo "Error: no SHA256 tool found (sha256sum or shasum)." >&2
-        return 1
+    echo "WorkSpace: $TOOL_VERSION"
+    if [[ "$local_integrity" == "local" ]]; then echo "With local changes." ; fi
+}
+
+# Portable SHA256 helper
+function hash_sha256() {
+    if   command -v sha256sum >/dev/null 2>&1; then sha256sum        "$@"
+    elif command -v shasum    >/dev/null 2>&1; then shasum    -a 256 "$@"
+    else echo "Error: No SHA256 tool found (sha256sum or shasum)." >&2 ; return 1
     fi
 }
 
 function UninstallWorkspace() {
-    local dest=".workspace/tools/workspace.sh"
     local tools_dir=".workspace/tools"
+    local dest="$tools_dir/workspace.sh"
     local sha_file="$tools_dir/workspace.sh.sha256"
     local meta_file="$tools_dir/workspace.sh.meta"
 
-    if [[ ! -f "$dest" && ! -f "$sha_file" && ! -f "$meta_file" ]]; then
-        echo "WorkSpace is already uninstalled (no workspace.sh or related files found)."
-        return 0
-    fi
-
     rm -f "$dest" "$sha_file" "$meta_file"
 
-    # Attempt cleanup of empty directories (ignore errors)
     rmdir "$tools_dir" 2>/dev/null || true
     rmdir ".workspace" 2>/dev/null || true
 
@@ -114,7 +150,11 @@ function UninstallWorkspace() {
 
 function DownloadWorkspace() {
     WS_VERSION=${1:-latest}
-    local tmpfile tmpsha256 expected_sha256 actual_sha256 dest dest_dir sha_file meta_file actual_version
+    local tmpfile tmpsha256 expected_sha256 actual_sha256
+    local tools_dir=".workspace/tools"
+    local dest="$tools_dir/workspace.sh"
+    local sha_file="$tools_dir/workspace.sh.sha256"
+    local meta_file="$tools_dir/workspace.sh.meta"
 
     tmpfile=$(mktemp "/tmp/workspace.sh.XXXXXX")
     tmpsha256=$(mktemp "/tmp/workspace.sh.sha256.XXXXXX")
@@ -124,138 +164,101 @@ function DownloadWorkspace() {
     TOOL_URL="${DWLD_URL}/${WS_VERSION}/workspace.sh"
     SHA256_URL="${DWLD_URL}/${WS_VERSION}/workspace.sh.sha256"
 
-    # Download script
     if ! curl -fsSLo "$tmpfile" "$TOOL_URL"; then
         echo "Error: Failed to download workspace.sh from ${TOOL_URL}" >&2
         rm -f "$tmpfile" "$tmpsha256"
         return 1
     fi
 
-    # Download SHA256 file
     if ! curl -fsSLo "$tmpsha256" "$SHA256_URL"; then
         echo "Error: Failed to download workspace.sh.sha256 from ${SHA256_URL}" >&2
         rm -f "$tmpfile" "$tmpsha256"
         return 1
     fi
 
-    # Read expected SHA256
     expected_sha256=$(awk '{print $1}' "$tmpsha256")
-
-    # Validate SHA256 format (64 hex chars)
     if ! [[ "$expected_sha256" =~ ^[0-9a-fA-F]{64}$ ]]; then
-        echo "Error: SHA256 file is malformed (got '$expected_sha256')" >&2
+        echo "Malformed SHA256 file: $expected_sha256" >&2
         rm -f "$tmpfile" "$tmpsha256"
         return 1
     fi
 
-    # Compute actual hash
-    if ! actual_sha256=$(hash_sha256 "$tmpfile" | awk '{print $1}'); then
-        rm -f "$tmpfile" "$tmpsha256"
-        return 1
-    fi
+    actual_sha256=$(hash_sha256 "$tmpfile" | awk '{print $1}')
 
     if [[ "$expected_sha256" != "$actual_sha256" ]]; then
-        echo "Error: SHA256 mismatch for workspace.sh" >&2
-        echo "  Expected: $expected_sha256" >&2
-        echo "  Actual:   $actual_sha256" >&2
+        echo "SHA256 mismatch for downloaded workspace.sh" >&2
         rm -f "$tmpfile" "$tmpsha256"
         return 1
     fi
 
-    # Determine version from downloaded file
     chmod +x "$tmpfile"
     actual_version=$("$tmpfile" ws-version 2>/dev/null || echo "")
 
-    if [[ -z "$actual_version" ]]; then
-        echo "Error: Could not determine version from workspace.sh" >&2
-        rm -f "$tmpfile" "$tmpsha256"
-        return 1
-    fi
-
-    # Install locations
-    dest=".workspace/tools/workspace.sh"
-    dest_dir="$(dirname "$dest")"
-    sha_file="$dest_dir/workspace.sh.sha256"
-    meta_file="$dest_dir/workspace.sh.meta"
-
-    mkdir -p "$dest_dir"
-
-    if ! mv -f "$tmpfile" "$dest"; then
-        echo "Error: Failed to move workspace.sh into $dest" >&2
-        rm -f "$tmpfile" "$tmpsha256"
-        return 1
-    fi
+    mkdir -p "$tools_dir"
+    mv    -f "$tmpfile" "$dest"
     chmod +x "$dest"
 
-    # Save local checksum
     printf '%s  %s\n' "$actual_sha256" "workspace.sh" > "$sha_file"
 
-    # Write metadata
     {
         echo "version=${actual_version}"
         echo "url=${TOOL_URL}"
         echo "sha256=${actual_sha256}"
+        echo "integrity=official"
         echo "downloaded_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    } > "$meta_file"
+
+    rm -f "$tmpsha256"
+
+    if [[ "$VERBOSE" == "true" ]]; then
+        echo "workspace.sh downloaded, verified, and installed."
+        echo "Workspace: $dest"
+        echo "Metadata : $meta_file"
+    fi
+}
+
+function RehashWorkspace() {
+    local tools_dir=".workspace/tools"
+    local dest="$tools_dir/workspace.sh"
+    local sha_file="$tools_dir/workspace.sh.sha256"
+    local meta_file="$tools_dir/workspace.sh.meta"
+
+    if [[ ! -f "$dest" ]]; then
+        echo "Error: workspace.sh not found. Please run: $0 install" >&2
+        return 1
+    fi
+
+    mkdir -p "$tools_dir"
+
+    local actual_sha256
+    actual_sha256=$(hash_sha256 "$dest" | awk '{print $1}')
+
+    printf '%s  %s\n' "$actual_sha256" "workspace.sh" > "$sha_file"
+
+    {
+        echo "version=local"
+        echo "url=local"
+        echo "sha256=${actual_sha256}"
+        echo "integrity=local"
+        echo "rehash_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     } > "$meta_file"
 
     touch "$dest"
 
-    if [[ "${VERBOSE}" == "true" ]]; then
-        echo "workspace.sh downloaded, verified (SHA256), and installed."
-        echo "Workspace written to: $dest"
-        echo "Metadata  written to: $meta_file"
-        echo "Digest    written to: $sha_file"
-        echo "Actual version: ${actual_version}"
-        echo ""
-        echo "You can now rerun: ./workspace"
-    fi
-
-    rm -f "$tmpsha256"
+    echo "workspace.sh has been rehashed."
+    echo "⚠️ This WorkSpace installation is now marked as locally modified (integrity=local)."
 }
 
-### --- COMMAND DISPATCH --- ###
+# Early handling of version/help so they don't require curl
 case "${COMMAND}" in
-    uninstall)
-        UninstallWorkspace
-        exit 0
-        ;;
-    install|update)
-        WS_VERSION="${2:-latest}"
-        DownloadWorkspace "${WS_VERSION}"
-        exit 0
-        ;;
-    run)
-        if [[ "${1-}" == "run" ]]; then shift; fi
-        ;;
-    *)
-        ;;
+    version) PrintVersion ; exit 0 ; ;;
+    help)    PrintHelp    ; exit 0 ; ;;
 esac
 
-### --- RUN MODE --- ###
-dest=".workspace/tools/workspace.sh"
-tools_dir=".workspace/tools"
-sha_file="$tools_dir/workspace.sh.sha256"
-meta_file="$tools_dir/workspace.sh.meta"
-
-# Required files existence
-if [[ ! -f "$dest" || ! -f "$sha_file" || ! -f "$meta_file" ]]; then
-    echo "WorkSpace is not installed correctly."
-    echo "Please run: $0 install"
+# Need curl for install/run/update/rehash/uninstall
+if ! command -v curl >/dev/null 2>&1; then
+    echo "Error: curl is required but was not found." >&2
     exit 1
 fi
 
-# Ensure workspace.sh is newer than checksum
-if [[ "$dest" -ot "$sha_file" ]]; then
-    echo "workspace.sh appears older than its checksum file."
-    echo "Please run: $0 update"
-    exit 1
-fi
-
-# Verify SHA256
-if ! (cd "$tools_dir" && hash_sha256 -c "workspace.sh.sha256" >/dev/null); then
-    echo "Local workspace.sh failed SHA256 verification."
-    echo "Please run: $0 update"
-    exit 1
-fi
-
-exec "$dest" "$@"
+Main "$@"
