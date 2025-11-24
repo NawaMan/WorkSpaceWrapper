@@ -2,7 +2,7 @@
 set -euo pipefail
 trap 'status=$?; echo "❌ Error on line $LINENO (exit $status)" >&2; exit "$status"' ERR
 
-VERSION=0.2.0
+VERSION=0.3.0
 VERBOSE="${VERBOSE:-true}"
 
 # Decide what the "command" is:
