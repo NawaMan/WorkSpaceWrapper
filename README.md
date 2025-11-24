@@ -13,7 +13,8 @@ Run the following on the project base folder.
 ```shell
 curl -fsSL -o workspace \
   https://github.com/NawaMan/WorkSpaceWrapper/releases/latest/download/workspace \
-  && chmod +x workspace
+  && chmod +x workspace \
+  && ./workspace install
 ```
 
 Run `workspace` and follow the instruction.
