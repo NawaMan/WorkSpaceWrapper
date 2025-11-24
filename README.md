@@ -4,6 +4,8 @@ WorkSpaceWrapper is the stable entry point for using the [CodingBooth WorkSpace]
 
 It does not contain WorkSpace itself — instead, it reliably downloads, verifies, and launches the real workspace.sh tool inside your project.
 
+The wrapper is intended to be stable so do not worry if you don't see much activity in this project. :-)
+
 # Quick Install (per project)
 
 Run the following on the project base folder.
@@ -12,6 +14,12 @@ Run the following on the project base folder.
 curl -fsSL -o workspace \
   https://github.com/NawaMan/WorkSpaceWrapper/releases/latest/download/workspace \
   && chmod +x workspace
+```
+
+Run `workspace` and follow the instruction.
+
+```shell
+./workspace
 ```
 
 # Why the Wrapper Exists
