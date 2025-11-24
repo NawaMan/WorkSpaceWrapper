@@ -2,7 +2,7 @@
 set -euo pipefail
 trap 'status=$?; echo "❌ Error on line $LINENO (exit $status)" >&2; exit "$status"' ERR
 
-VERSION=0.3.0
+VERSION=0.4.0
 VERBOSE="${VERBOSE:-true}"
 
 # Decide what the "command" is:
@@ -195,9 +195,12 @@ function DownloadWorkspace() {
     actual_version=$("$tmpfile" ws-version 2>/dev/null || echo "")
 
     mkdir -p "$tools_dir"
+
+    # Install the verified tool
     mv    -f "$tmpfile" "$dest"
     chmod +x "$dest"
 
+    # Write the checksum file for this exact file
     printf '%s  %s\n' "$actual_sha256" "workspace.sh" > "$sha_file"
 
     {
@@ -209,6 +212,10 @@ function DownloadWorkspace() {
     } > "$meta_file"
 
     rm -f "$tmpsha256"
+
+    # IMPORTANT: enforce your integrity model
+    # Tool *must* be newer than its checksum in trusted states.
+    touch "$dest"
 
     if [[ "$VERBOSE" == "true" ]]; then
         echo "workspace.sh downloaded, verified, and installed."
